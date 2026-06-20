@@ -30,6 +30,7 @@ const createInitialState = (): GameState => ({
   eventLog: [],
   insulationStrategy: 'natural',
   lastInsulationConsumptionAt: Date.now(),
+  insulationConsumptionAccumulator: 0,
 })
 
 const state = reactive<GameState>(createInitialState())
@@ -99,16 +100,59 @@ const setInsulationStrategy = (strategy: InsulationStrategy) => {
   const oldStrategy = state.insulationStrategy
   if (oldStrategy === strategy) return
 
-  state.insulationStrategy = strategy
-  const effect = INSULATION_EFFECTS[strategy]
+  const oldEffect = INSULATION_EFFECTS[oldStrategy]
+  const newEffect = INSULATION_EFFECTS[strategy]
   const isHarshWeather = HARSH_WEATHERS.includes(state.currentWeather)
+  const eggCountNow = state.birds.filter(b => b.stage === 'egg' && !b.isDead).length
 
-  if (isHarshWeather && strategy !== 'natural') {
-    addEventLog(`${INSULATION_NAMES[strategy]} 已启动！${effect.description}，每分钟消耗 ${effect.foodConsumptionPerMinute} 食物`, 'success')
-  } else if (strategy === 'natural') {
-    addEventLog(`已切换为${INSULATION_NAMES[strategy]}，不再消耗额外食物`, 'info')
+  state.insulationStrategy = strategy
+  state.lastInsulationConsumptionAt = Date.now()
+  state.insulationConsumptionAccumulator = 0
+
+  if (eggCountNow === 0 && strategy !== 'natural') {
+    addEventLog(`已切换为${INSULATION_NAMES[strategy]}，但当前没有待孵化的蛋，保温不会产生效果`, 'warning')
+    return
+  }
+
+  if (strategy === 'natural') {
+    if (oldEffect.foodConsumptionPerMinute > 0) {
+      addEventLog(`已关闭保温，切换为${INSULATION_NAMES[strategy]}，不再消耗额外食物`, 'info')
+    }
+  } else if (isHarshWeather) {
+    const weatherPenalty = HARSH_WEATHER_PENALTY[state.currentWeather]
+    const effectiveMod = Math.round(weatherPenalty * newEffect.eggProgressMod * 100)
+    const penaltyPercent = Math.round((1 - weatherPenalty) * 100)
+
+    if (oldStrategy === 'natural') {
+      addEventLog(
+        `${INSULATION_EMOJI[strategy]} ${INSULATION_NAMES[strategy]} 已启动！` +
+        `当前${penaltyPercent}%的寒冷惩罚将被抵消，` +
+        `实际孵化效率 ${effectiveMod}%，` +
+        `每10秒消耗 ${(newEffect.foodConsumptionPerMinute / 6).toFixed(1)} 食物`,
+        'success'
+      )
+    } else {
+      const oldEffectiveMod = Math.round(weatherPenalty * oldEffect.eggProgressMod * 100)
+      const modDiff = effectiveMod - oldEffectiveMod
+      const consumptionDiff = newEffect.foodConsumptionPerMinute - oldEffect.foodConsumptionPerMinute
+
+      const direction = modDiff > 0 ? '提升' : '降低'
+      const consDirection = consumptionDiff > 0 ? '增加' : '减少'
+
+      addEventLog(
+        `${INSULATION_EMOJI[strategy]} 已切换为${INSULATION_NAMES[strategy]}！` +
+        `孵化效率${direction} ${Math.abs(modDiff)}% → ${effectiveMod}%，` +
+        `每分钟消耗${consDirection} ${Math.abs(consumptionDiff)} → ${newEffect.foodConsumptionPerMinute}`,
+        modDiff > 0 ? 'success' : 'info'
+      )
+    }
   } else {
-    addEventLog(`已切换为${INSULATION_NAMES[strategy]}，当前天气温暖，保温效果不明显`, 'info')
+    addEventLog(
+      `${INSULATION_EMOJI[strategy]} 已切换为${INSULATION_NAMES[strategy]}，` +
+      `当前天气温暖，保温加速效果 ${Math.round((newEffect.eggProgressMod - 1) * 100)}%，` +
+      `每分钟消耗 ${newEffect.foodConsumptionPerMinute} 食物`,
+      'info'
+    )
   }
 }
 
@@ -127,21 +171,43 @@ const updateInsulationConsumption = () => {
   const elapsed = now - state.lastInsulationConsumptionAt
   if (elapsed < INSULATION_CONSUMPTION_INTERVAL) return
 
-  const consumption = INSULATION_EFFECTS[state.insulationStrategy].foodConsumptionPerMinute
-  if (consumption > 0) {
-    const actualConsumption = Math.ceil(consumption * (elapsed / 60000))
-    if (actualConsumption > 0) {
-      if (state.foodStock >= actualConsumption) {
-        state.foodStock -= actualConsumption
-        addEventLog(`${INSULATION_EMOJI[state.insulationStrategy]} 保温消耗了 ${actualConsumption} 食物`, 'warning')
+  const strategy = state.insulationStrategy
+  const consumptionPerMinute = INSULATION_EFFECTS[strategy].foodConsumptionPerMinute
+
+  if (consumptionPerMinute > 0) {
+    const elapsedMinutes = elapsed / 60000
+    const consumptionThisPeriod = consumptionPerMinute * elapsedMinutes
+
+    state.insulationConsumptionAccumulator += consumptionThisPeriod
+
+    const consumeAmount = Math.floor(state.insulationConsumptionAccumulator)
+
+    if (consumeAmount > 0) {
+      if (state.foodStock >= consumeAmount) {
+        state.foodStock -= consumeAmount
+        state.insulationConsumptionAccumulator -= consumeAmount
+
+        const hourlyRate = consumptionPerMinute * 60
+        addEventLog(
+          `${INSULATION_EMOJI[strategy]} ${INSULATION_NAMES[strategy].split(' ')[1]}消耗 ${consumeAmount} 食物` +
+          ` (${consumptionPerMinute}/分钟 · ${hourlyRate}/小时)`,
+          'warning'
+        )
       } else {
-        const shortfall = actualConsumption - state.foodStock
+        const shortfall = consumeAmount - state.foodStock
         state.foodStock = 0
-        addEventLog(`⚠️ 食物不足！保温效果减弱，还差 ${shortfall} 食物才能维持${INSULATION_NAMES[state.insulationStrategy]}`, 'danger')
         state.insulationStrategy = 'natural'
+        state.insulationConsumptionAccumulator = 0
+
+        addEventLog(
+          `⚠️ 食物不足！还差 ${shortfall} 食物才能维持${INSULATION_NAMES[strategy]}，` +
+          `已自动切换为${INSULATION_NAMES.natural}`,
+          'danger'
+        )
       }
     }
   }
+
   state.lastInsulationConsumptionAt = now
 }
 
@@ -157,6 +223,7 @@ const startGame = () => {
   }
 
   state.lastInsulationConsumptionAt = Date.now()
+  state.insulationConsumptionAccumulator = 0
   addEventLog(`🎉 新的一窝！鸟巢里有 ${eggCount} 颗蛋在等待孵化~`, 'success')
   startGameLoop()
   saveGame(state)
@@ -368,17 +435,39 @@ const changeWeather = () => {
   const becameHarsh = !HARSH_WEATHERS.includes(oldWeather) && HARSH_WEATHERS.includes(newWeather)
   const becameNice = HARSH_WEATHERS.includes(oldWeather) && !HARSH_WEATHERS.includes(newWeather)
 
-  if (becameHarsh && eggCount > 0 && state.insulationStrategy === 'natural') {
-    const penalty = Math.round((1 - HARSH_WEATHER_PENALTY[newWeather]) * 100)
-    addEventLog(`🥶 恶劣天气来袭！蛋的孵化速度将降低 ${penalty}%，建议切换保温策略！`, 'warning')
-  } else if (becameHarsh && eggCount > 0 && state.insulationStrategy !== 'natural') {
-    const currentMod = getEggProgressMod()
-    const effectiveRate = Math.round(currentMod * 100)
-    addEventLog(`${INSULATION_EMOJI[state.insulationStrategy]} 当前${INSULATION_NAMES[state.insulationStrategy]}正在运作，孵化效率约为正常的 ${effectiveRate}%`, 'success')
-  }
+  if (eggCount > 0) {
+    if (becameHarsh) {
+      const penalty = Math.round((1 - HARSH_WEATHER_PENALTY[newWeather]) * 100)
+      const baseEfficiency = Math.round(HARSH_WEATHER_PENALTY[newWeather] * 100)
 
-  if (becameNice && state.insulationStrategy !== 'natural') {
-    addEventLog(`☀️ 天气转好，可考虑关闭保温以节省食物`, 'info')
+      if (state.insulationStrategy === 'natural') {
+        addEventLog(
+          `🥶 恶劣天气来袭！孵化速度降低 ${penalty}%，` +
+          `当前效率仅 ${baseEfficiency}%，建议切换保温策略！`,
+          'warning'
+        )
+      } else {
+        const currentMod = getEggProgressMod()
+        const effectiveRate = Math.round(currentMod * 100)
+        const strategy = state.insulationStrategy
+        const consumption = INSULATION_EFFECTS[strategy].foodConsumptionPerMinute
+        addEventLog(
+          `${INSULATION_EMOJI[strategy]} ${INSULATION_NAMES[strategy]}正在运作，` +
+          `抵消${penalty}%寒冷惩罚后效率为 ${effectiveRate}%，` +
+          `消耗 ${consumption}/分钟`,
+          'success'
+        )
+      }
+    } else if (becameNice && state.insulationStrategy !== 'natural') {
+      const strategy = state.insulationStrategy
+      const boostMod = Math.round((INSULATION_EFFECTS[strategy].eggProgressMod - 1) * 100)
+      const consumption = INSULATION_EFFECTS[strategy].foodConsumptionPerMinute
+      addEventLog(
+        `☀️ 天气转好，当前保温提供 +${boostMod}% 加速，` +
+        `消耗 ${consumption}/分钟，可考虑关闭以节省食物`,
+        'info'
+      )
+    }
   }
 }
 

@@ -58,6 +58,7 @@ export interface GameState {
   eventLog: { id: string; message: string; type: string; timestamp: number }[]
   insulationStrategy: InsulationStrategy
   lastInsulationConsumptionAt: number
+  insulationConsumptionAccumulator: number
   score?: GameScore
   selectedBirdId?: string
 }
