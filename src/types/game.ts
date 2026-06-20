@@ -2,6 +2,8 @@ export type GrowthStage = 'egg' | 'chick' | 'juvenile' | 'subadult' | 'adult'
 
 export type Weather = 'sunny' | 'rainy' | 'snowy' | 'stormy'
 
+export type InsulationStrategy = 'natural' | 'straw' | 'blanket' | 'heater'
+
 export type Personality = 'bold' | 'shy' | 'gentle' | 'curious' | 'stubborn'
 
 export type BerryType = 'red' | 'blue' | 'golden'
@@ -54,6 +56,8 @@ export interface GameState {
   breedingCount: number
   maxBreedingRounds: number
   eventLog: { id: string; message: string; type: string; timestamp: number }[]
+  insulationStrategy: InsulationStrategy
+  lastInsulationConsumptionAt: number
   score?: GameScore
   selectedBirdId?: string
 }
@@ -74,4 +78,10 @@ export interface WeatherEffect {
   healthMod: number
   awayChance?: number
   sickChance?: number
+}
+
+export interface InsulationEffect {
+  eggProgressMod: number
+  foodConsumptionPerMinute: number
+  description: string
 }

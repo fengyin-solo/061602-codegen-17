@@ -1,4 +1,4 @@
-import type { Weather, WeatherEffect, BerryType, GrowthStage, Personality } from '@/types/game'
+import type { Weather, WeatherEffect, BerryType, GrowthStage, Personality, InsulationStrategy, InsulationEffect } from '@/types/game'
 
 export const ATTR_MIN = 0
 export const ATTR_MAX = 100
@@ -104,6 +104,54 @@ export const INITIAL_FOOD = 30
 export const MIN_EGGS = 2
 export const MAX_EGGS = 4
 export const MAX_BREEDING_ROUNDS = 2
+
+export const HARSH_WEATHERS: Weather[] = ['rainy', 'snowy', 'stormy']
+
+export const INSULATION_EFFECTS: Record<InsulationStrategy, InsulationEffect> = {
+  natural: {
+    eggProgressMod: 1.0,
+    foodConsumptionPerMinute: 0,
+    description: '自然保温，无额外消耗',
+  },
+  straw: {
+    eggProgressMod: 1.15,
+    foodConsumptionPerMinute: 2,
+    description: '稻草保温，轻微加速',
+  },
+  blanket: {
+    eggProgressMod: 1.35,
+    foodConsumptionPerMinute: 5,
+    description: '毛毯保温，显著加速',
+  },
+  heater: {
+    eggProgressMod: 1.6,
+    foodConsumptionPerMinute: 10,
+    description: '暖炉保温，大幅加速',
+  },
+}
+
+export const INSULATION_NAMES: Record<InsulationStrategy, string> = {
+  natural: '🌿 自然保温',
+  straw: '🌾 稻草保温',
+  blanket: '🧣 毛毯保温',
+  heater: '🔥 暖炉保温',
+}
+
+export const INSULATION_EMOJI: Record<InsulationStrategy, string> = {
+  natural: '🌿',
+  straw: '🌾',
+  blanket: '🧣',
+  heater: '🔥',
+}
+
+export const HARSH_WEATHER_PENALTY: Record<Weather, number> = {
+  sunny: 1.0,
+  rainy: 0.75,
+  snowy: 0.55,
+  stormy: 0.4,
+}
+
+export const INSULATION_CONSUMPTION_INTERVAL = 10000
 
 export const BIRD_NAMES = [
   '毛毛', '豆豆', '啾啾', '喳喳', '花花', '点点', '果果', '泡泡',

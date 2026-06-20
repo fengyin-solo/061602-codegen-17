@@ -7,14 +7,20 @@ import NestScene from './NestScene.vue'
 import WeatherOverlay from './WeatherOverlay.vue'
 import BirdCard from './BirdCard.vue'
 import EventModal from './EventModal.vue'
+import InsulationPanel from './InsulationPanel.vue'
 import { WEATHER_COLORS } from '@/utils/constants'
+import type { InsulationStrategy } from '@/types/game'
 
 const router = useRouter()
 const {
-  state, allAdults, aliveCount,
+  state, allAdults, aliveCount, eggCount, isHarshWeather, currentEggProgressMod,
   collectBerry, feedBird, calmBird, buryBird,
-  releaseBirds, keepAndBreed, returnToStart, tryLoadGame,
+  releaseBirds, keepAndBreed, returnToStart, tryLoadGame, setInsulationStrategy,
 } = useGameState()
+
+const handleSetStrategy = (strategy: InsulationStrategy) => {
+  setInsulationStrategy(strategy)
+}
 
 onMounted(() => {
   if (state.phase === 'start') {
@@ -92,13 +98,22 @@ const handleCollect = (id: string) => {
           </div>
         </div>
 
-        <div class="lg:col-span-3 order-3 min-h-0 flex flex-col rounded-2xl bg-black/20 border border-white/10">
-          <EventModal
+        <div class="lg:col-span-3 order-3 min-h-0 flex flex-col gap-3">
+          <InsulationPanel
             :state="state"
-            :all-adults="allAdults"
-            @release="releaseBirds"
-            @breed="keepAndBreed"
+            :egg-count="eggCount"
+            :is-harsh-weather="isHarshWeather"
+            :current-egg-progress-mod="currentEggProgressMod"
+            @set-strategy="handleSetStrategy"
           />
+          <div class="flex-1 min-h-0 flex flex-col rounded-2xl bg-black/20 border border-white/10 overflow-hidden">
+            <EventModal
+              :state="state"
+              :all-adults="allAdults"
+              @release="releaseBirds"
+              @breed="keepAndBreed"
+            />
+          </div>
         </div>
       </div>
 

@@ -1,5 +1,5 @@
 import { reactive, computed, watch } from 'vue'
-import type { GameState, Bird, Berry, GrowthStage, Personality, BerryType, Weather, GameScore } from '@/types/game'
+import type { GameState, Bird, Berry, GrowthStage, Personality, BerryType, Weather, GameScore, InsulationStrategy } from '@/types/game'
 import {
   ATTR_MIN, ATTR_MAX, DEATH_THRESHOLD,
   STAGE_DURATION, FOOD_NEED_MULTIPLIER,
@@ -8,6 +8,8 @@ import {
   BERRY_VALUES, WEATHER_CHANGE_INTERVAL, WEATHER_EFFECTS,
   DAY_DURATION, INITIAL_FOOD, MIN_EGGS, MAX_EGGS,
   MAX_BREEDING_ROUNDS, BIRD_NAMES,
+  INSULATION_EFFECTS, INSULATION_NAMES, INSULATION_EMOJI, HARSH_WEATHERS,
+  HARSH_WEATHER_PENALTY, INSULATION_CONSUMPTION_INTERVAL,
 } from '@/utils/constants'
 import { randomInt, randomFloat, clamp, randomChoice, generateId, chance } from '@/utils/random'
 import { saveGame, loadGame, clearSave } from '@/utils/storage'
@@ -26,6 +28,8 @@ const createInitialState = (): GameState => ({
   breedingCount: 0,
   maxBreedingRounds: MAX_BREEDING_ROUNDS,
   eventLog: [],
+  insulationStrategy: 'natural',
+  lastInsulationConsumptionAt: Date.now(),
 })
 
 const state = reactive<GameState>(createInitialState())
@@ -37,6 +41,7 @@ const PERSONALITIES: Personality[] = ['bold', 'shy', 'gentle', 'curious', 'stubb
 const WEATHERS: Weather[] = ['sunny', 'rainy', 'snowy', 'stormy']
 const BERRY_TYPES: BerryType[] = ['red', 'red', 'red', 'blue', 'blue', 'golden']
 const GROWTH_ORDER: GrowthStage[] = ['egg', 'chick', 'juvenile', 'subadult', 'adult']
+const INSULATION_STRATEGIES: InsulationStrategy[] = ['natural', 'straw', 'blanket', 'heater']
 
 const usedNames = new Set<string>()
 
@@ -89,6 +94,57 @@ const addEventLog = (message: string, type: string = 'info') => {
   if (state.eventLog.length > 50) state.eventLog.pop()
 }
 
+const setInsulationStrategy = (strategy: InsulationStrategy) => {
+  if (!INSULATION_STRATEGIES.includes(strategy)) return
+  const oldStrategy = state.insulationStrategy
+  if (oldStrategy === strategy) return
+
+  state.insulationStrategy = strategy
+  const effect = INSULATION_EFFECTS[strategy]
+  const isHarshWeather = HARSH_WEATHERS.includes(state.currentWeather)
+
+  if (isHarshWeather && strategy !== 'natural') {
+    addEventLog(`${INSULATION_NAMES[strategy]} 已启动！${effect.description}，每分钟消耗 ${effect.foodConsumptionPerMinute} 食物`, 'success')
+  } else if (strategy === 'natural') {
+    addEventLog(`已切换为${INSULATION_NAMES[strategy]}，不再消耗额外食物`, 'info')
+  } else {
+    addEventLog(`已切换为${INSULATION_NAMES[strategy]}，当前天气温暖，保温效果不明显`, 'info')
+  }
+}
+
+const getEggProgressMod = (): number => {
+  const weatherPenalty = HARSH_WEATHER_PENALTY[state.currentWeather]
+  const insulationMod = INSULATION_EFFECTS[state.insulationStrategy].eggProgressMod
+
+  if (HARSH_WEATHERS.includes(state.currentWeather)) {
+    return weatherPenalty * insulationMod
+  }
+  return 1.0
+}
+
+const updateInsulationConsumption = () => {
+  const now = Date.now()
+  const elapsed = now - state.lastInsulationConsumptionAt
+  if (elapsed < INSULATION_CONSUMPTION_INTERVAL) return
+
+  const consumption = INSULATION_EFFECTS[state.insulationStrategy].foodConsumptionPerMinute
+  if (consumption > 0) {
+    const actualConsumption = Math.ceil(consumption * (elapsed / 60000))
+    if (actualConsumption > 0) {
+      if (state.foodStock >= actualConsumption) {
+        state.foodStock -= actualConsumption
+        addEventLog(`${INSULATION_EMOJI[state.insulationStrategy]} 保温消耗了 ${actualConsumption} 食物`, 'warning')
+      } else {
+        const shortfall = actualConsumption - state.foodStock
+        state.foodStock = 0
+        addEventLog(`⚠️ 食物不足！保温效果减弱，还差 ${shortfall} 食物才能维持${INSULATION_NAMES[state.insulationStrategy]}`, 'danger')
+        state.insulationStrategy = 'natural'
+      }
+    }
+  }
+  state.lastInsulationConsumptionAt = now
+}
+
 const startGame = () => {
   Object.assign(state, createInitialState())
   usedNames.clear()
@@ -100,6 +156,7 @@ const startGame = () => {
     state.birds.push(createEgg(i))
   }
 
+  state.lastInsulationConsumptionAt = Date.now()
   addEventLog(`🎉 新的一窝！鸟巢里有 ${eggCount} 颗蛋在等待孵化~`, 'success')
   startGameLoop()
   saveGame(state)
@@ -143,6 +200,8 @@ const updateGame = (deltaMs: number) => {
     changeWeather()
   }
 
+  updateInsulationConsumption()
+
   const weatherEffect = WEATHER_EFFECTS[state.currentWeather]
   const aliveBirds = state.birds.filter(b => !b.isDead)
 
@@ -168,7 +227,9 @@ const updateBird = (bird: Bird, deltaMs: number, weatherEffect: ReturnType<typeo
   }
 
   if (bird.stage === 'egg') {
-    bird.hatchTimeLeft -= deltaMs
+    const eggProgressMod = getEggProgressMod()
+    const actualDelta = deltaMs * eggProgressMod
+    bird.hatchTimeLeft -= actualDelta
     if (bird.hatchTimeLeft <= 0) {
       hatchBird(bird)
     }
@@ -298,9 +359,27 @@ const getWeatherEffects = () => WEATHER_EFFECTS[state.currentWeather]
 
 const changeWeather = () => {
   const newWeather = randomChoice(WEATHERS.filter(w => w !== state.currentWeather))
+  const oldWeather = state.currentWeather
   state.currentWeather = newWeather
   state.nextWeatherChangeAt = Date.now() + WEATHER_CHANGE_INTERVAL + randomInt(-10000, 10000)
   addEventLog(`🌤️ 天气变化：${newWeather}`, 'info')
+
+  const eggCount = state.birds.filter(b => b.stage === 'egg' && !b.isDead).length
+  const becameHarsh = !HARSH_WEATHERS.includes(oldWeather) && HARSH_WEATHERS.includes(newWeather)
+  const becameNice = HARSH_WEATHERS.includes(oldWeather) && !HARSH_WEATHERS.includes(newWeather)
+
+  if (becameHarsh && eggCount > 0 && state.insulationStrategy === 'natural') {
+    const penalty = Math.round((1 - HARSH_WEATHER_PENALTY[newWeather]) * 100)
+    addEventLog(`🥶 恶劣天气来袭！蛋的孵化速度将降低 ${penalty}%，建议切换保温策略！`, 'warning')
+  } else if (becameHarsh && eggCount > 0 && state.insulationStrategy !== 'natural') {
+    const currentMod = getEggProgressMod()
+    const effectiveRate = Math.round(currentMod * 100)
+    addEventLog(`${INSULATION_EMOJI[state.insulationStrategy]} 当前${INSULATION_NAMES[state.insulationStrategy]}正在运作，孵化效率约为正常的 ${effectiveRate}%`, 'success')
+  }
+
+  if (becameNice && state.insulationStrategy !== 'natural') {
+    addEventLog(`☀️ 天气转好，可考虑关闭保温以节省食物`, 'info')
+  }
 }
 
 const spawnBerry = () => {
@@ -365,6 +444,15 @@ const allAdults = computed(() => {
 })
 
 const aliveCount = computed(() => state.birds.filter(b => !b.isDead).length)
+
+const eggCount = computed(() => state.birds.filter(b => b.stage === 'egg' && !b.isDead).length)
+
+const isHarshWeather = computed(() => HARSH_WEATHERS.includes(state.currentWeather))
+
+const currentEggProgressMod = computed(() => {
+  const mod = getEggProgressMod()
+  return Math.round(mod * 100)
+})
 
 const checkAllAdult = () => {
   if (allAdults.value) {
@@ -504,7 +592,11 @@ export function useGameState() {
     restartGame,
     returnToStart,
     tryLoadGame,
+    setInsulationStrategy,
     allAdults,
     aliveCount,
+    eggCount,
+    isHarshWeather,
+    currentEggProgressMod,
   }
 }
